@@ -1,0 +1,9 @@
+numpy==2.2.6
+opencv-contrib-python==4.11.0.86
+packaging==25.0
+PyQt6==6.6.1
+PyQt6-Qt6==6.6.1
+PyQt6_sip==13.11.0
+QtPy==2.4.1
+setuptools==80.9.0
+wheel==0.45.1
