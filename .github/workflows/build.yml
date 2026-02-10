@@ -3,8 +3,11 @@ name: Build Executables
 on:
   push:
     tags:
-      - 'v*'          # Trigger on version tags like v1.0.0
-  workflow_dispatch:  # Allow manual trigger from GitHub UI
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-linux:
@@ -12,11 +15,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
@@ -35,7 +36,7 @@ jobs:
         run: |
           pyinstaller --onefile \
             --windowed \
-            --name ChArUco_Calibration \
+            --name ChArUco_Calibration_Linux \
             --add-data "config.py:." \
             --add-data "camera_utils.py:." \
             --add-data "video_thread.py:." \
@@ -55,18 +56,22 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ChArUco_Calibration_Linux
-          path: dist/ChArUco_Calibration
+          path: dist/ChArUco_Calibration_Linux
+
+      - name: Upload Linux binary to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ChArUco_Calibration_Linux
+
 
   build-windows:
     name: Build Windows Executable
     runs-on: windows-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
@@ -78,24 +83,28 @@ jobs:
 
       - name: Build Windows executable
         run: |
-          pyinstaller --onefile --windowed --name ChArUco_Calibration --icon "app.ico" --add-data "config.py;." --add-data "camera_utils.py;." --add-data "video_thread.py;." --add-data "intrinsic_calibration.py;." --add-data "extrinsic_calibration.py;." --add-data "measurements.py;." --add-data "app.ico;." --hidden-import cv2 --hidden-import numpy --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import PyQt6.QtWidgets --collect-submodules cv2 Calibration_App.py
+          pyinstaller --onefile --windowed --name ChArUco_Calibration_Windows --icon "app.ico" --add-data "config.py;." --add-data "camera_utils.py;." --add-data "video_thread.py;." --add-data "intrinsic_calibration.py;." --add-data "extrinsic_calibration.py;." --add-data "measurements.py;." --add-data "app.ico;." --hidden-import cv2 --hidden-import numpy --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import PyQt6.QtWidgets --collect-submodules cv2 Calibration_App.py
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: ChArUco_Calibration_Windows
-          path: dist/ChArUco_Calibration.exe
+          path: dist/ChArUco_Calibration_Windows.exe
+
+      - name: Upload Windows binary to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ChArUco_Calibration_Windows.exe
+
 
   build-macos:
     name: Build macOS Executable
     runs-on: macos-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
@@ -109,7 +118,7 @@ jobs:
         run: |
           pyinstaller --onefile \
             --windowed \
-            --name ChArUco_Calibration \
+            --name ChArUco_Calibration_macOS \
             --add-data "config.py:." \
             --add-data "camera_utils.py:." \
             --add-data "video_thread.py:." \
@@ -129,4 +138,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ChArUco_Calibration_macOS
-          path: dist/ChArUco_Calibration
+          path: dist/ChArUco_Calibration_macOS
+
+      - name: Upload macOS binary to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ChArUco_Calibration_macOS
