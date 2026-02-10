@@ -116,7 +116,7 @@ class Measurement:
             plane_normal_cam = R[:, 2]
             
             # Distance from origin to plane along normal
-            d = plane_normal_cam.dot(self.tvec.flatten())
+            d = -plane_normal_cam.dot(self.tvec.flatten())
             
             # Project both points to the measurement plane
             pt1_3d = self.image_to_plane(self.click_points[0], R, plane_normal_cam, d)
