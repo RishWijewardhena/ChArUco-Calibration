@@ -44,6 +44,10 @@ class VideoThread(QThread):
             if not self.cap.isOpened():
                 raise RuntimeError(f"Cannot open camera {self.camera_source}")
             
+            # Set camera resolution to 1280×960 for better calibration accuracy
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 960)
+            
             while self.running:
                 ret, frame = self.cap.read()
                 if not ret:
