@@ -65,6 +65,7 @@ class ChArUcoCalibrationGUI(QMainWindow):
         
         # Measurement UI data
         self.frozen_frame = None
+        self.frozen_frame_raw = None  # Raw (distorted) frame for accurate measurement math
         self.click_points = []
         self.current_measure_frame = None
         
@@ -612,6 +613,7 @@ class ChArUcoCalibrationGUI(QMainWindow):
             qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
             
             pixmap = QPixmap.fromImage(qt_image)
+            
             scaled = pixmap.scaled(self.measure_video_label.size(),
                                   Qt.AspectRatioMode.KeepAspectRatio,
                                   Qt.TransformationMode.SmoothTransformation)
@@ -620,11 +622,13 @@ class ChArUcoCalibrationGUI(QMainWindow):
     def freeze_frame(self):
         """Freeze current frame for measurement"""
         if self.video_thread and self.video_thread.isRunning():
-            # Undistort and capture current frame
             if self.current_measure_frame is not None:
+                # Store RAW (distorted) frame - image_to_plane needs distorted pixel coords
+                self.frozen_frame_raw = self.current_measure_frame.copy()
+                
+                # Create undistorted version for display only
                 undistorted = self.measurement.undistort_frame(self.current_measure_frame)
                 
-                # Convert to QPixmap
                 rgb_image = cv2.cvtColor(undistorted, cv2.COLOR_BGR2RGB)
                 h, w, ch = rgb_image.shape
                 bytes_per_line = ch * w
@@ -632,6 +636,7 @@ class ChArUcoCalibrationGUI(QMainWindow):
                 self.frozen_frame = QPixmap.fromImage(qt_image)
             else:
                 self.frozen_frame = self.measure_video_label.pixmap()
+                self.frozen_frame_raw = None
 
             self.video_thread.stop()
             self.video_thread = None

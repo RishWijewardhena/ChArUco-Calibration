@@ -147,11 +147,17 @@ class Measurement:
         Raises:
             RuntimeError: If ray is parallel to plane
         """
-        # Undistort to normalized coordinates
-        pts = np.array(pt, dtype=np.float64).reshape(-1, 1, 2)
-        und = cv2.undistortPoints(pts, self.camera_matrix, self.dist_coeffs, P=None)
-        x = und[0, 0, 0]
-        y = und[0, 0, 1]
+        # Points come from the UNDISTORTED image, so we only need to apply
+        # the inverse camera matrix to get normalized ray direction.
+        # Do NOT call cv2.undistortPoints() here — that would double-undistort
+        # since the frozen frame the user clicks on is already undistorted.
+        fx = self.camera_matrix[0, 0]
+        fy = self.camera_matrix[1, 1]
+        cx = self.camera_matrix[0, 2]
+        cy = self.camera_matrix[1, 2]
+
+        x = (pt[0] - cx) / fx
+        y = (pt[1] - cy) / fy
         ray_cam = np.array([x, y, 1.0])
         
         denom = plane_normal_cam.dot(ray_cam)
