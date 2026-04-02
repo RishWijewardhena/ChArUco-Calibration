@@ -42,6 +42,8 @@ python Calibration_App_refactored.py
 set CAMERA_SOURCE=1
 python Calibration_App_refactored.py
 ```
+### 1.2  In ubuntu make sure to install below system libraries
+sudo apt install libxcb-cursor0
 
 ### 2. **Modular Design**
 
