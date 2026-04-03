@@ -24,7 +24,8 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QTextEdit,
                              QTabWidget, QSpinBox, QDoubleSpinBox, QGroupBox,
-                             QMessageBox, QFileDialog, QProgressBar, QFrame, QComboBox)
+                             QMessageBox, QFileDialog, QProgressBar, QFrame, QComboBox,
+                             QCheckBox)
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QThread
 from PyQt6.QtGui import QImage, QPixmap, QFont, QIcon
 
@@ -66,6 +67,7 @@ class ChArUcoCalibrationGUI(QMainWindow):
         # Measurement UI data
         self.frozen_frame = None
         self.frozen_frame_raw = None  # Raw (distorted) frame for accurate measurement math
+        self.frozen_frame_is_raw = False  # Track if displayed frame is raw (True) or undistorted (False)
         self.click_points = []
         self.current_measure_frame = None
         
@@ -98,6 +100,14 @@ class ChArUcoCalibrationGUI(QMainWindow):
                 self.video_thread.detection_info.disconnect()
             except TypeError:
                 pass
+            try:
+                self.video_thread.camera_lost.disconnect()
+            except TypeError:
+                pass
+            try:
+                self.video_thread.finished.disconnect()
+            except TypeError:
+                pass
 
             self.video_thread.stop()
             self.video_thread = None
@@ -108,6 +118,40 @@ class ChArUcoCalibrationGUI(QMainWindow):
             self.refresh_cam_btn.setEnabled(True)
             self.camera_selector.setToolTip("")
             self.refresh_cam_btn.setToolTip("")
+
+    def _reset_tab_buttons_for_stopped_camera(self):
+        """Reset camera-related controls based on current tab after stream stops."""
+        current_tab = self.tabs.currentIndex() if hasattr(self, 'tabs') else 0
+
+        if current_tab == 0:  # Intrinsics
+            self.calib_start_btn.setEnabled(True)
+            self.calib_capture_btn.setEnabled(False)
+            self.calib_stop_btn.setEnabled(False)
+        elif current_tab == 1:  # Extrinsics
+            self.extrin_start_btn.setEnabled(True)
+            self.extrin_capture_btn.setEnabled(False)
+            self.extrin_stop_btn.setEnabled(False)
+        elif current_tab == 2:  # Measurement
+            self.measure_start_btn.setEnabled(True)
+            self.measure_freeze_btn.setEnabled(False)
+            self.measure_reset_btn.setEnabled(False)
+            self.measure_stop_btn.setEnabled(False)
+
+    def on_video_thread_finished(self):
+        """Handle camera thread completion (normal stop or unexpected end)."""
+        self.video_thread = None
+        if hasattr(self, 'camera_selector'):
+            self.camera_selector.setEnabled(True)
+            self.refresh_cam_btn.setEnabled(True)
+            self.camera_selector.setToolTip("")
+            self.refresh_cam_btn.setToolTip("")
+        self._reset_tab_buttons_for_stopped_camera()
+
+    def on_camera_lost(self, message):
+        """Handle sudden camera disconnect/loss from worker thread."""
+        self.on_video_thread_finished()
+        self.statusBar().showMessage(message, 5000)
+        QMessageBox.warning(self, "Camera Disconnected", message)
 
     def init_detectors(self):
         """Initialize ArUco and ChArUco detectors"""
@@ -245,7 +289,7 @@ class ChArUcoCalibrationGUI(QMainWindow):
             "1. Click 'Start Camera' to begin live preview\n"
             "2. Show ChArUco board to camera from various angles\n"
             "3. Click 'Capture Frame' when board is clearly visible\n"
-            "4. Collect 15-30 frames with different orientations\n"
+            "4. Collect 20-25 frames with different orientations\n"
             "5. Click 'Calibrate' to compute camera intrinsics"
         )
         inst_text.setWordWrap(True)
@@ -266,7 +310,7 @@ class ChArUcoCalibrationGUI(QMainWindow):
         self.calib_corners_label = QLabel("Corners Detected: 0")
         self.calib_frames_label = QLabel("Frames Captured: 0")
         self.calib_progress = QProgressBar()
-        self.calib_progress.setMaximum(30)
+        self.calib_progress.setMaximum(25)  # Target 25 frames for calibration
         info_layout.addWidget(self.calib_corners_label)
         info_layout.addWidget(self.calib_frames_label)
         info_layout.addWidget(self.calib_progress)
@@ -405,6 +449,14 @@ class ChArUcoCalibrationGUI(QMainWindow):
         btn_layout.addWidget(self.measure_freeze_btn)
         btn_layout.addWidget(self.measure_reset_btn)
         btn_layout.addWidget(self.measure_stop_btn)
+
+        # Undistortion toggle
+        self.undistort_checkbox = QCheckBox("Apply undistortion")
+        self.undistort_checkbox.setChecked(False)  # Default OFF for low-distortion cameras
+        self.undistort_checkbox.setToolTip("Toggle to apply lens distortion correction.\n"
+                                          "Uncheck for cameras with minimal distortion.")
+        btn_layout.addWidget(self.undistort_checkbox)
+
         layout.addLayout(btn_layout)
         
         # Log
@@ -433,6 +485,8 @@ class ChArUcoCalibrationGUI(QMainWindow):
             self.video_thread = VideoThread(self.camera_source, self.charuco_detector, self.board)
             self.video_thread.change_pixmap.connect(self.update_calib_image)
             self.video_thread.detection_info.connect(self.update_calib_detection)
+            self.video_thread.camera_lost.connect(self.on_camera_lost)
+            self.video_thread.finished.connect(self.on_video_thread_finished)
             self.video_thread.start()
 
             # Disable camera selector while camera is running
@@ -537,15 +591,7 @@ class ChArUcoCalibrationGUI(QMainWindow):
     
     def stop_calibration_camera(self):
         """Stop calibration camera"""
-        if self.video_thread:
-            try:
-                self.video_thread.change_pixmap.disconnect()
-                self.video_thread.detection_info.disconnect()
-            except TypeError:
-                pass
-
-            self.video_thread.stop()
-            self.video_thread = None
+        self.stop_active_camera()
 
         self.calib_start_btn.setEnabled(True)
         self.calib_capture_btn.setEnabled(False)
@@ -578,6 +624,8 @@ class ChArUcoCalibrationGUI(QMainWindow):
             self.video_thread = VideoThread(self.camera_source, self.charuco_detector, self.board)
             self.video_thread.change_pixmap.connect(self.update_extrin_image)
             self.video_thread.detection_info.connect(self.update_extrin_detection)
+            self.video_thread.camera_lost.connect(self.on_camera_lost)
+            self.video_thread.finished.connect(self.on_video_thread_finished)
             self.video_thread.start()
 
             # Disable camera selector while camera is running
@@ -643,14 +691,7 @@ class ChArUcoCalibrationGUI(QMainWindow):
     
     def stop_extrinsics_camera(self):
         """Stop extrinsics camera"""
-        if self.video_thread:
-            try:
-                self.video_thread.change_pixmap.disconnect()
-                self.video_thread.detection_info.disconnect()
-            except TypeError:
-                pass
-            self.video_thread.stop()
-            self.video_thread = None
+        self.stop_active_camera()
         
         self.extrin_start_btn.setEnabled(True)
         self.extrin_capture_btn.setEnabled(False)
@@ -685,6 +726,8 @@ class ChArUcoCalibrationGUI(QMainWindow):
             self.video_thread = VideoThread(self.camera_source, self.charuco_detector, self.board)
             self.video_thread.change_pixmap.connect(self.update_measure_display_from_signal)
             self.video_thread.detection_info.connect(self.store_measurement_frame)
+            self.video_thread.camera_lost.connect(self.on_camera_lost)
+            self.video_thread.finished.connect(self.on_video_thread_finished)
             self.video_thread.start()
 
             # Disable camera selector while camera is running
@@ -725,24 +768,32 @@ class ChArUcoCalibrationGUI(QMainWindow):
         pass  # Display is handled by store_measurement_frame -> update_measure_display
 
     def update_measure_display(self):
-        """Update measurement video display with undistorted frame"""
+        """Update measurement video display - respects undistortion toggle"""
         # Skip if frame is frozen (user clicked Freeze Frame)
         if self.frozen_frame is not None:
             return
 
-        # Always undistort the latest raw frame if available
         if self.current_measure_frame is None:
             return
 
-        # Undistort using measurement module
-        undistorted = self.measurement.undistort_frame(self.current_measure_frame)
+        # Check if undistortion should be applied
+        apply_undistortion = self.undistort_checkbox.isChecked()
+
+        if apply_undistortion and self.camera_matrix is not None and self.dist_coeffs is not None:
+            # Undistort using measurement module
+            display_frame = self.measurement.undistort_frame(self.current_measure_frame)
+            overlay_text = "Undistorted Feed"
+        else:
+            # Show raw frame
+            display_frame = self.current_measure_frame.copy()
+            overlay_text = "Raw Feed"
 
         # Add text overlay
-        cv2.putText(undistorted, "Undistorted Feed", (20, 40),
+        cv2.putText(display_frame, overlay_text, (20, 40),
                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
 
         # Convert to Qt format
-        rgb_image = cv2.cvtColor(undistorted, cv2.COLOR_BGR2RGB)
+        rgb_image = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
         qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
@@ -758,13 +809,21 @@ class ChArUcoCalibrationGUI(QMainWindow):
         """Freeze current frame for measurement"""
         if self.video_thread and self.video_thread.isRunning():
             if self.current_measure_frame is not None:
-                # Store RAW (distorted) frame - image_to_plane needs distorted pixel coords
+                # Store RAW frame - needed for accurate measurement math
                 self.frozen_frame_raw = self.current_measure_frame.copy()
-                
-                # Create undistorted version for display only
-                undistorted = self.measurement.undistort_frame(self.current_measure_frame)
-                
-                rgb_image = cv2.cvtColor(undistorted, cv2.COLOR_BGR2RGB)
+
+                # Check if undistortion should be applied for display
+                apply_undistortion = self.undistort_checkbox.isChecked()
+                self.frozen_frame_is_raw = not apply_undistortion
+
+                if apply_undistortion and self.camera_matrix is not None and self.dist_coeffs is not None:
+                    # Create undistorted version for display
+                    display_frame = self.measurement.undistort_frame(self.current_measure_frame)
+                else:
+                    # Show raw frame
+                    display_frame = self.current_measure_frame.copy()
+
+                rgb_image = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
                 h, w, ch = rgb_image.shape
                 bytes_per_line = ch * w
                 qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
@@ -772,6 +831,7 @@ class ChArUcoCalibrationGUI(QMainWindow):
             else:
                 self.frozen_frame = self.measure_video_label.pixmap()
                 self.frozen_frame_raw = None
+                self.frozen_frame_is_raw = False
 
             self.video_thread.stop()
             self.video_thread = None
@@ -922,18 +982,8 @@ class ChArUcoCalibrationGUI(QMainWindow):
     def stop_measurement(self):
         """Stop measurement mode"""
         try:
-            if self.video_thread:
-                try:
-                    self.video_thread.change_pixmap.disconnect()
-                except:
-                    pass
-                try:
-                    self.video_thread.detection_info.disconnect()
-                except:
-                    pass
-                self.video_thread.stop()
-                self.video_thread = None
-        except:
+            self.stop_active_camera()
+        except Exception:
             self.video_thread = None
             self.log_message(self.measure_log, "camera stopping failed")
         

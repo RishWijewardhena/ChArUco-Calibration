@@ -37,11 +37,17 @@ class CalibrationWorker(QThread):
         """Execute calibration algorithm"""
         try:
             self.progress.emit("Running calibration algorithm...")
+
+            # Use calibration flags for better accuracy with wide-angle lenses
+            # Fix higher-order coefficients initially, then release them
+            flags = cv2.CALIB_FIX_K4 | cv2.CALIB_FIX_K5 | cv2.CALIB_FIX_K6
+
             ret, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.aruco.calibrateCameraCharuco(
-                self.corners, self.ids, self.board, self.image_size, None, None
+                self.corners, self.ids, self.board, self.image_size, None, None,
+                flags=flags
             )
-            
-            if not ret or ret > 2.0:  # RMS error threshold
+
+            if not ret or ret > 1.5:  # RMS error threshold (stricter for better accuracy)
                 self.finished.emit(False, "Calibration RMS error too high. Collect better frames.", None)
                 return
                 

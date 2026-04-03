@@ -16,6 +16,7 @@ class VideoThread(QThread):
     """Thread for continuous video capture and processing"""
     change_pixmap = pyqtSignal(QImage)
     detection_info = pyqtSignal(dict)
+    camera_lost = pyqtSignal(str)
 
     def __init__(self, camera_source, detector, board, invert_colors=None, target_fps=30):
         """
@@ -38,6 +39,7 @@ class VideoThread(QThread):
         self.invert_colors = invert_colors if invert_colors is not None else INVERT_COLORS
         self.target_fps = target_fps
         self.frame_interval = 1.0 / target_fps
+        self.max_read_failures = 20
         
     def run(self):
         """Main thread execution loop - captures and processes frames"""
@@ -53,11 +55,22 @@ class VideoThread(QThread):
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 960)
             
             last_frame_time = time.time()
+            read_failures = 0
 
             while self.running:
                 ret, frame = self.cap.read()
                 if not ret:
+                    read_failures += 1
+
+                    # Camera unplug/disconnect often causes repeated read failures.
+                    if read_failures >= self.max_read_failures:
+                        self.camera_lost.emit("Camera stream lost. The camera may be disconnected.")
+                        break
+
+                    time.sleep(0.05)
                     continue
+
+                read_failures = 0
 
                 # Frame rate limiting - skip processing if too soon
                 current_time = time.time()
@@ -99,6 +112,7 @@ class VideoThread(QThread):
                 
         except Exception as e:
             print(f"Video thread error: {e}")
+            self.camera_lost.emit(f"Camera error: {e}")
         finally:
             if self.cap:
                 self.cap.release()
@@ -106,5 +120,9 @@ class VideoThread(QThread):
     def stop(self):
         """Stop the video thread and release camera"""
         self.running = False
+        if self.cap is not None:
+            self.cap.release()
         self.quit()
-        self.wait()
+        if not self.wait(1500):
+            self.terminate()
+            self.wait(500)

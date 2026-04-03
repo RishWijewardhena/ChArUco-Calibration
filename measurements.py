@@ -60,9 +60,45 @@ class Measurement:
         """
         if self.camera_matrix is None or self.dist_coeffs is None:
             raise ValueError("Camera calibration not set")
-        
+
         return cv2.undistort(frame, self.camera_matrix, self.dist_coeffs)
-    
+
+    def undistort_points(self, points):
+        """
+        Convert raw (distorted) pixel coordinates to undistorted coordinates.
+
+        Args:
+            points (list): List of (x, y) pixel coordinates from distorted image
+
+        Returns:
+            list: List of (x, y) undistorted pixel coordinates
+
+        Raises:
+            ValueError: If camera calibration not set
+        """
+        if self.camera_matrix is None or self.dist_coeffs is None:
+            raise ValueError("Camera calibration not set")
+
+        # Convert points to numpy array format expected by OpenCV
+        pts = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+
+        # Undistort points
+        undistorted = cv2.undistortPoints(pts, self.camera_matrix, self.dist_coeffs)
+
+        # Convert back to pixel coordinates by applying camera matrix
+        fx = self.camera_matrix[0, 0]
+        fy = self.camera_matrix[1, 1]
+        cx = self.camera_matrix[0, 2]
+        cy = self.camera_matrix[1, 2]
+
+        result = []
+        for pt in undistorted:
+            x = pt[0][0] * fx + cx
+            y = pt[0][1] * fy + cy
+            result.append((x, y))
+
+        return result
+
     def add_click_point(self, pixel_coords):
         """
         Add a clicked point for measurement.
