@@ -31,7 +31,7 @@ from PyQt6.QtGui import QImage, QPixmap, QFont, QIcon
 # Import our modules
 from config import (CALIB_FILE, EXTRINSICS_FILE, MIN_CHARUCO_CORNERS, 
                     get_detectors, get_aruco_board)
-from camera_utils import get_camera_source, get_available_cameras_with_names
+from camera_utils import get_camera_source, get_available_cameras_with_names, get_camera_backend
 from video_thread import VideoThread
 from intrinsic_calibration import IntrinsicCalibration, CalibrationWorker
 from extrinsic_calibration import ExtrinsicCalibration
@@ -102,6 +102,13 @@ class ChArUcoCalibrationGUI(QMainWindow):
             self.video_thread.stop()
             self.video_thread = None
 
+        # Re-enable camera selector
+        if hasattr(self, 'camera_selector'):
+            self.camera_selector.setEnabled(True)
+            self.refresh_cam_btn.setEnabled(True)
+            self.camera_selector.setToolTip("")
+            self.refresh_cam_btn.setToolTip("")
+
     def init_detectors(self):
         """Initialize ArUco and ChArUco detectors"""
         try:
@@ -152,25 +159,55 @@ class ChArUcoCalibrationGUI(QMainWindow):
         self.refresh_cam_btn.clicked.connect(self.refresh_camera_list)
 
     def refresh_camera_list(self):
-        """Refresh the camera selection dropdown"""
+        """Refresh the camera selector dropdown with available cameras"""
+        self.camera_selector.blockSignals(True)  # Prevent triggering during update
+        self.camera_selector.clear()
+
         try:
             cameras = get_available_cameras_with_names()
-            self.camera_selector.clear()
 
-            if cameras:
-                for idx, (cam_id, cam_name) in enumerate(cameras):
-                    self.camera_selector.addItem(f"{cam_id}: {cam_name}", userData=cam_id)
-                self.statusBar().showMessage(f"Found {len(cameras)} camera(s)")
+            if not cameras:
+                self.camera_selector.addItem("No cameras detected", None)
+                self.statusBar().showMessage("No cameras found", 5000)
             else:
-                self.camera_selector.addItem("No cameras found", userData=None)
-                self.statusBar().showMessage("No cameras detected")
+                for cam in cameras:
+                    self.camera_selector.addItem(cam['display_name'], cam['source'])
+
+                # Try to select the current camera source
+                current_source = self.camera_source
+                selected = False
+                for i in range(self.camera_selector.count()):
+                    if self.camera_selector.itemData(i) == current_source:
+                        self.camera_selector.setCurrentIndex(i)
+                        selected = True
+                        break
+
+                # If current camera not found, select first available
+                if not selected and self.camera_selector.count() > 0:
+                    self.camera_selector.setCurrentIndex(0)
+                    self.camera_source = self.camera_selector.itemData(0)
+
+                self.statusBar().showMessage(f"Found {len(cameras)} camera(s)")
         except Exception as e:
             self.statusBar().showMessage(f"Error detecting cameras: {str(e)}")
+        finally:
+            self.camera_selector.blockSignals(False)
 
     def on_camera_selected(self, index):
         """Handle camera selection change"""
         cam_id = self.camera_selector.itemData(index)
         if cam_id is not None:
+            # Validate camera can be opened
+            try:
+                test_cap = cv2.VideoCapture(cam_id, get_camera_backend())
+                if not test_cap.isOpened():
+                    raise RuntimeError("Cannot open camera")
+                test_cap.release()
+            except Exception as e:
+                QMessageBox.warning(self, "Camera Unavailable",
+                                  f"Cannot access camera {cam_id}. It may be in use by another application.")
+                return
+
             self.camera_source = cam_id
             self.statusBar().showMessage(f"Camera selected: {cam_id}")
             # Stop any active camera when changing selection
@@ -384,19 +421,31 @@ class ChArUcoCalibrationGUI(QMainWindow):
     def start_calibration_camera(self):
         """Start camera for calibration"""
         try:
+            # Check if a valid camera is selected
+            if self.camera_selector.currentData() is None:
+                QMessageBox.warning(self, "No Camera",
+                                  "No cameras detected. Please connect a camera and click Refresh.")
+                return
+
             if self.video_thread and self.video_thread.isRunning():
                 self.stop_calibration_camera()
-            
+
             self.video_thread = VideoThread(self.camera_source, self.charuco_detector, self.board)
             self.video_thread.change_pixmap.connect(self.update_calib_image)
             self.video_thread.detection_info.connect(self.update_calib_detection)
             self.video_thread.start()
-            
+
+            # Disable camera selector while camera is running
+            self.camera_selector.setEnabled(False)
+            self.refresh_cam_btn.setEnabled(False)
+            self.camera_selector.setToolTip("Stop camera to change selection")
+            self.refresh_cam_btn.setToolTip("Stop camera to refresh")
+
             self.calib_start_btn.setEnabled(False)
             self.calib_capture_btn.setEnabled(True)
             self.calib_stop_btn.setEnabled(True)
             self.log_message(self.calib_log, f"Camera started successfully (source: {self.camera_source})")
-            
+
         except Exception as e:
             QMessageBox.critical(self, "Camera Error", f"Failed to start camera: {str(e)}")
     
@@ -508,28 +557,40 @@ class ChArUcoCalibrationGUI(QMainWindow):
     def start_extrinsics_camera(self):
         """Start camera for extrinsics"""
         try:
+            # Check if a valid camera is selected
+            if self.camera_selector.currentData() is None:
+                QMessageBox.warning(self, "No Camera",
+                                  "No cameras detected. Please connect a camera and click Refresh.")
+                return
+
             if not os.path.exists(CALIB_FILE):
-                QMessageBox.warning(self, "No Calibration", 
+                QMessageBox.warning(self, "No Calibration",
                                   "Complete intrinsics calibration first!")
                 return
-            
+
             if self.video_thread and self.video_thread.isRunning():
                 self.stop_extrinsics_camera()
-            
+
             # Load intrinsics for extrinsic module
             self.camera_matrix, self.dist_coeffs = self.extrinsic.load_intrinsics()
             self.extrinsic.set_intrinsics(self.camera_matrix, self.dist_coeffs)
-            
+
             self.video_thread = VideoThread(self.camera_source, self.charuco_detector, self.board)
             self.video_thread.change_pixmap.connect(self.update_extrin_image)
             self.video_thread.detection_info.connect(self.update_extrin_detection)
             self.video_thread.start()
-            
+
+            # Disable camera selector while camera is running
+            self.camera_selector.setEnabled(False)
+            self.refresh_cam_btn.setEnabled(False)
+            self.camera_selector.setToolTip("Stop camera to change selection")
+            self.refresh_cam_btn.setToolTip("Stop camera to refresh")
+
             self.extrin_start_btn.setEnabled(False)
             self.extrin_capture_btn.setEnabled(True)
             self.extrin_stop_btn.setEnabled(True)
             self.log_message(self.extrin_log, "Camera started - show ChArUco board")
-            
+
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to start: {str(e)}")
     
@@ -601,64 +662,97 @@ class ChArUcoCalibrationGUI(QMainWindow):
     def start_measurement(self):
         """Start measurement mode"""
         try:
+            # Check if a valid camera is selected
+            if self.camera_selector.currentData() is None:
+                QMessageBox.warning(self, "No Camera",
+                                  "No cameras detected. Please connect a camera and click Refresh.")
+                return
+
             if not self.load_saved_calibration():
                 QMessageBox.warning(self, "Not Calibrated",
                                   "Complete both intrinsics and extrinsics calibration first!")
                 return
-            
+
             if self.video_thread and self.video_thread.isRunning():
                 self.stop_measurement()
-            
+
             # Set calibration data in measurement module
             self.measurement.set_calibration(
                 self.camera_matrix, self.dist_coeffs,
                 self.rvec, self.tvec
             )
-            
+
             self.video_thread = VideoThread(self.camera_source, self.charuco_detector, self.board)
-            self.video_thread.change_pixmap.connect(self.update_measure_image_undistorted)
+            self.video_thread.change_pixmap.connect(self.update_measure_display_from_signal)
             self.video_thread.detection_info.connect(self.store_measurement_frame)
             self.video_thread.start()
-            
+
+            # Disable camera selector while camera is running
+            self.camera_selector.setEnabled(False)
+            self.refresh_cam_btn.setEnabled(False)
+            self.camera_selector.setToolTip("Stop camera to change selection")
+            self.refresh_cam_btn.setToolTip("Stop camera to refresh")
+
             self.measure_start_btn.setEnabled(False)
             self.measure_freeze_btn.setEnabled(True)
             self.measure_stop_btn.setEnabled(True)
             self.frozen_frame = None
             self.click_points = []
             self.current_measure_frame = None
-            
+
             self.log_message(self.measure_log, "Measurement mode started - showing undistorted feed")
-            
+
         except Exception as e:
             QMessageBox.critical(self, "Measurement Error", f"Failed to start: {str(e)}")
     
     def store_measurement_frame(self, info):
-        """Store the current raw frame for undistortion"""
+        """Store the current raw frame and update display with undistorted version"""
         if 'frame' in info:
             self.current_measure_frame = info['frame']
+
+            # Update display with undistorted frame (if not frozen)
+            if self.frozen_frame is None:
+                self.update_measure_display()
     
-    def update_measure_image_undistorted(self, image):
-        """Update measurement video display with undistorted feed"""
-        if self.frozen_frame is None and self.current_measure_frame is not None:
-            # Undistort using measurement module
-            undistorted = self.measurement.undistort_frame(self.current_measure_frame)
-            
-            # Add text overlay
-            cv2.putText(undistorted, "Undistorted Feed", (20, 40),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-            
-            # Convert to Qt format
-            rgb_image = cv2.cvtColor(undistorted, cv2.COLOR_BGR2RGB)
-            h, w, ch = rgb_image.shape
-            bytes_per_line = ch * w
-            qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-            
-            pixmap = QPixmap.fromImage(qt_image)
-            
-            scaled = pixmap.scaled(self.measure_video_label.size(),
-                                  Qt.AspectRatioMode.KeepAspectRatio,
-                                  Qt.TransformationMode.SmoothTransformation)
-            self.measure_video_label.setPixmap(scaled)
+    def update_measure_display_from_signal(self, image):
+        """Update measurement video display from change_pixmap signal - displays distorted feed as fallback"""
+        # The actual undistorted display is handled in store_measurement_frame
+        # This is a fallback in case detection_info signal is delayed
+        if self.frozen_frame is not None or self.current_measure_frame is None:
+            return
+        # Only update if we haven't already updated via store_measurement_frame
+        # (store_measurement_frame runs first since detection_info is emitted before change_pixmap)
+        pass  # Display is handled by store_measurement_frame -> update_measure_display
+
+    def update_measure_display(self):
+        """Update measurement video display with undistorted frame"""
+        # Skip if frame is frozen (user clicked Freeze Frame)
+        if self.frozen_frame is not None:
+            return
+
+        # Always undistort the latest raw frame if available
+        if self.current_measure_frame is None:
+            return
+
+        # Undistort using measurement module
+        undistorted = self.measurement.undistort_frame(self.current_measure_frame)
+
+        # Add text overlay
+        cv2.putText(undistorted, "Undistorted Feed", (20, 40),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+
+        # Convert to Qt format
+        rgb_image = cv2.cvtColor(undistorted, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb_image.shape
+        bytes_per_line = ch * w
+        qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+
+        pixmap = QPixmap.fromImage(qt_image)
+
+        scaled = pixmap.scaled(self.measure_video_label.size(),
+                              Qt.AspectRatioMode.KeepAspectRatio,
+                              Qt.TransformationMode.SmoothTransformation)
+        self.measure_video_label.setPixmap(scaled)
     
     def freeze_frame(self):
         """Freeze current frame for measurement"""
