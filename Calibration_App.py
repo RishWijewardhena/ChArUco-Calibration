@@ -21,17 +21,17 @@ import numpy as np
 import os
 from pathlib import Path
 
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QPushButton, QLabel, QTextEdit, 
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QPushButton, QLabel, QTextEdit,
                              QTabWidget, QSpinBox, QDoubleSpinBox, QGroupBox,
-                             QMessageBox, QFileDialog, QProgressBar, QFrame)
+                             QMessageBox, QFileDialog, QProgressBar, QFrame, QComboBox)
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QThread
 from PyQt6.QtGui import QImage, QPixmap, QFont, QIcon
 
 # Import our modules
 from config import (CALIB_FILE, EXTRINSICS_FILE, MIN_CHARUCO_CORNERS, 
                     get_detectors, get_aruco_board)
-from camera_utils import get_camera_source
+from camera_utils import get_camera_source, get_available_cameras_with_names
 from video_thread import VideoThread
 from intrinsic_calibration import IntrinsicCalibration, CalibrationWorker
 from extrinsic_calibration import ExtrinsicCalibration
@@ -134,6 +134,47 @@ class ChArUcoCalibrationGUI(QMainWindow):
         
         # Status bar
         self.statusBar().showMessage("Ready")
+
+        # Camera selector in status bar
+        self.statusBar().addPermanentWidget(QLabel("Camera: "))
+        self.camera_selector = QComboBox()
+        self.camera_selector.setMinimumWidth(200)
+        self.refresh_cam_btn = QPushButton("Refresh")
+        self.refresh_cam_btn.setMaximumWidth(60)
+        self.statusBar().addPermanentWidget(self.camera_selector)
+        self.statusBar().addPermanentWidget(self.refresh_cam_btn)
+
+        # Populate initial camera list
+        self.refresh_camera_list()
+
+        # Connect signals
+        self.camera_selector.currentIndexChanged.connect(self.on_camera_selected)
+        self.refresh_cam_btn.clicked.connect(self.refresh_camera_list)
+
+    def refresh_camera_list(self):
+        """Refresh the camera selection dropdown"""
+        try:
+            cameras = get_available_cameras_with_names()
+            self.camera_selector.clear()
+
+            if cameras:
+                for idx, (cam_id, cam_name) in enumerate(cameras):
+                    self.camera_selector.addItem(f"{cam_id}: {cam_name}", userData=cam_id)
+                self.statusBar().showMessage(f"Found {len(cameras)} camera(s)")
+            else:
+                self.camera_selector.addItem("No cameras found", userData=None)
+                self.statusBar().showMessage("No cameras detected")
+        except Exception as e:
+            self.statusBar().showMessage(f"Error detecting cameras: {str(e)}")
+
+    def on_camera_selected(self, index):
+        """Handle camera selection change"""
+        cam_id = self.camera_selector.itemData(index)
+        if cam_id is not None:
+            self.camera_source = cam_id
+            self.statusBar().showMessage(f"Camera selected: {cam_id}")
+            # Stop any active camera when changing selection
+            self.stop_active_camera()
 
     def on_tab_changed(self, index):
         """Stop camera when switching tabs"""

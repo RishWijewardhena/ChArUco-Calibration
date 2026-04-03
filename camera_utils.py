@@ -100,16 +100,16 @@ def open_camera(cam_source=None, backend=None):
 def get_available_cameras(max_test=10):
     """
     Detect available camera indices on the system.
-    
+
     Args:
         max_test (int): Maximum number of camera indices to test
-    
+
     Returns:
         list: List of available camera indices
     """
     available_cameras = []
     backend = get_camera_backend()
-    
+
     for i in range(max_test):
         try:
             cap = cv2.VideoCapture(i, backend)
@@ -118,5 +118,45 @@ def get_available_cameras(max_test=10):
                 cap.release()
         except:
             continue
-    
+
+    return available_cameras
+
+
+def get_available_cameras_with_names(max_test=10):
+    """
+    Detect available cameras with OS-friendly display names.
+
+    Args:
+        max_test (int): Maximum number of camera indices to test
+
+    Returns:
+        list: List of dicts with 'source' and 'display_name' keys
+              Example: [{'source': 0, 'display_name': 'Camera 0'},
+                        {'source': '/dev/video1', 'display_name': '/dev/video1'}]
+    """
+    available_cameras = []
+    backend = get_camera_backend()
+    system = platform.system()
+
+    for i in range(max_test):
+        try:
+            if system == "Linux":
+                # Linux uses device paths
+                source = f"/dev/video{i}"
+                display_name = source
+            else:
+                # Windows/macOS use integer indices
+                source = i
+                display_name = f"Camera {i}"
+
+            cap = cv2.VideoCapture(source, backend)
+            if cap.isOpened():
+                available_cameras.append({
+                    'source': source,
+                    'display_name': display_name
+                })
+                cap.release()
+        except:
+            continue
+
     return available_cameras
