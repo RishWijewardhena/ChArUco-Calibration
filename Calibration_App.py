@@ -134,7 +134,6 @@ class ChArUcoCalibrationGUI(QMainWindow):
         elif current_tab == 2:  # Measurement
             self.measure_start_btn.setEnabled(True)
             self.measure_freeze_btn.setEnabled(False)
-            self.measure_reset_btn.setEnabled(False)
             self.measure_stop_btn.setEnabled(False)
 
     def on_video_thread_finished(self):
@@ -272,7 +271,6 @@ class ChArUcoCalibrationGUI(QMainWindow):
 
         self.measure_start_btn.setEnabled(True)
         self.measure_freeze_btn.setEnabled(False)
-        self.measure_reset_btn.setEnabled(False)
         self.measure_stop_btn.setEnabled(False)
 
         self.statusBar().showMessage("Camera stopped (tab changed)")
@@ -438,16 +436,12 @@ class ChArUcoCalibrationGUI(QMainWindow):
         self.measure_freeze_btn = QPushButton("Freeze Frame")
         self.measure_freeze_btn.clicked.connect(self.freeze_frame)
         self.measure_freeze_btn.setEnabled(False)
-        self.measure_reset_btn = QPushButton("Reset Points")
-        self.measure_reset_btn.clicked.connect(self.reset_measurement)
-        self.measure_reset_btn.setEnabled(False)
         self.measure_stop_btn = QPushButton("Stop Measurement")
         self.measure_stop_btn.clicked.connect(self.stop_measurement)
         self.measure_stop_btn.setEnabled(False)
         
         btn_layout.addWidget(self.measure_start_btn)
         btn_layout.addWidget(self.measure_freeze_btn)
-        btn_layout.addWidget(self.measure_reset_btn)
         btn_layout.addWidget(self.measure_stop_btn)
 
         # Undistortion toggle
@@ -839,8 +833,7 @@ class ChArUcoCalibrationGUI(QMainWindow):
             self.click_points = []
             self.measurement.reset_points()
             self.measure_freeze_btn.setEnabled(False)
-            self.measure_reset_btn.setEnabled(True)
-            self.log_message(self.measure_log, "Frame frozen - click two points to measure")
+            self.log_message(self.measure_log, "Frame frozen - click any two points to measure")
     
     def measurement_click(self, event):
         """Handle mouse clicks on measurement view"""
@@ -848,7 +841,13 @@ class ChArUcoCalibrationGUI(QMainWindow):
             return
         
         if len(self.click_points) >= 2:
-            return
+            # Start a new measurement pair on next click without requiring reset/restart.
+            self.click_points = []
+            self.measurement.reset_points()
+            scaled = self.frozen_frame.scaled(self.measure_video_label.size(),
+                                             Qt.AspectRatioMode.KeepAspectRatio,
+                                             Qt.TransformationMode.SmoothTransformation)
+            self.measure_video_label.setPixmap(scaled)
         
         # Get click position relative to actual image
         label_size = self.measure_video_label.size()
@@ -968,17 +967,6 @@ class ChArUcoCalibrationGUI(QMainWindow):
             self.log_message(self.measure_log, f"✗ Error computing distance: {str(e)}")
             QMessageBox.critical(self, "Measurement Error", f"Failed to compute distance: {str(e)}")
     
-    def reset_measurement(self):
-        """Reset measurement points"""
-        self.click_points = []
-        self.measurement.reset_points()
-        if self.frozen_frame:
-            scaled = self.frozen_frame.scaled(self.measure_video_label.size(),
-                                             Qt.AspectRatioMode.KeepAspectRatio,
-                                             Qt.TransformationMode.SmoothTransformation)
-            self.measure_video_label.setPixmap(scaled)
-        self.log_message(self.measure_log, "Points reset - click two new points")
-    
     def stop_measurement(self):
         """Stop measurement mode"""
         try:
@@ -989,7 +977,6 @@ class ChArUcoCalibrationGUI(QMainWindow):
         
         self.measure_start_btn.setEnabled(True)
         self.measure_freeze_btn.setEnabled(False)
-        self.measure_reset_btn.setEnabled(False)
         self.measure_stop_btn.setEnabled(False)
         self.frozen_frame = None
         self.click_points = []
