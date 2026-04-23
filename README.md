@@ -24,6 +24,19 @@ calibration App/
 
 ## New Features
 
+### 0. **Runtime Camera + ChArUco Parameters Popup (NEW)**
+
+When the user clicks camera start actions, the app now opens a popup to configure:
+
+- ArUco dictionary (`DICT_TYPE`) via dropdown (all OpenCV dictionaries)
+- ChArUco board dimensions (`SQUARES_X`, `SQUARES_Y`)
+- Physical board sizes (`SQUARE_LENGTH`, `MARKER_LENGTH`)
+- Detection color inversion (`INVERT_COLORS`)
+- Camera capture resolution (`FRAME_WIDTH`, `FRAME_HEIGHT`)
+
+The selected values are cached in `runtime_settings.json` and auto-filled on next app start.
+If cache data is invalid, the app falls back safely to defaults from `config.py`.
+
 ### 1. **OS-Aware Camera Handling**
 
 The application now automatically detects your operating system and uses the appropriate camera source:
@@ -158,6 +171,11 @@ python Calibration_App_refactored.py
 5. Distance displayed in meters, centimeters, and millimeters
 
 ## Configuration
+
+### Runtime Configuration (Recommended)
+
+Use the startup popup (shown when starting camera streams) to change ChArUco and resolution settings per workflow.
+These values are persisted in `runtime_settings.json` and reused automatically.
 
 ### Custom ChArUco Board
 
