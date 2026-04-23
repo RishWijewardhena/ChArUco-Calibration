@@ -19,24 +19,128 @@ import sys
 import cv2
 import numpy as np
 import os
+import json
 from pathlib import Path
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QTextEdit,
                              QTabWidget, QSpinBox, QDoubleSpinBox, QGroupBox,
                              QMessageBox, QFileDialog, QProgressBar, QFrame, QComboBox,
-                             QCheckBox)
+                             QCheckBox, QDialog, QDialogButtonBox, QFormLayout)
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QThread
 from PyQt6.QtGui import QImage, QPixmap, QFont, QIcon
 
 # Import our modules
-from config import (CALIB_FILE, EXTRINSICS_FILE, MIN_CHARUCO_CORNERS, 
-                    get_detectors, get_aruco_board)
+from config import (
+    CALIB_FILE,
+    EXTRINSICS_FILE,
+    MIN_CHARUCO_CORNERS,
+    RUNTIME_SETTINGS_FILE,
+    get_default_runtime_settings,
+    validate_runtime_settings,
+    get_aruco_dictionary_names,
+    create_detectors,
+)
 from camera_utils import get_camera_source, get_available_cameras_with_names, get_camera_backend
 from video_thread import VideoThread
 from intrinsic_calibration import IntrinsicCalibration, CalibrationWorker
 from extrinsic_calibration import ExtrinsicCalibration
 from measurements import Measurement
+
+
+class CameraParametersDialog(QDialog):
+    """Popup window to collect runtime camera and board parameters."""
+
+    def __init__(self, current_settings, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Camera and ChArUco Parameters")
+        self.setModal(True)
+        self.setMinimumWidth(420)
+
+        settings = dict(get_default_runtime_settings())
+        settings.update(current_settings or {})
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.dict_combo = QComboBox()
+        for name in get_aruco_dictionary_names():
+            self.dict_combo.addItem(name)
+        current_dict = settings.get("dict_type", "")
+        dict_index = self.dict_combo.findText(str(current_dict))
+        if dict_index >= 0:
+            self.dict_combo.setCurrentIndex(dict_index)
+        form.addRow("Dictionary", self.dict_combo)
+
+        self.squares_x_spin = QSpinBox()
+        self.squares_x_spin.setRange(2, 50)
+        self.squares_x_spin.setValue(int(settings["squares_x"]))
+        form.addRow("Squares X", self.squares_x_spin)
+
+        self.squares_y_spin = QSpinBox()
+        self.squares_y_spin.setRange(2, 50)
+        self.squares_y_spin.setValue(int(settings["squares_y"]))
+        form.addRow("Squares Y", self.squares_y_spin)
+
+        self.square_length_spin = QDoubleSpinBox()
+        self.square_length_spin.setRange(0.0001, 10.0)
+        self.square_length_spin.setDecimals(6)
+        self.square_length_spin.setSingleStep(0.001)
+        self.square_length_spin.setValue(float(settings["square_length"]))
+        form.addRow("Square Length (m)", self.square_length_spin)
+
+        self.marker_length_spin = QDoubleSpinBox()
+        self.marker_length_spin.setRange(0.0001, 10.0)
+        self.marker_length_spin.setDecimals(6)
+        self.marker_length_spin.setSingleStep(0.001)
+        self.marker_length_spin.setValue(float(settings["marker_length"]))
+        form.addRow("Marker Length (m)", self.marker_length_spin)
+
+        self.invert_checkbox = QCheckBox("Invert grayscale before detection")
+        self.invert_checkbox.setChecked(bool(settings["invert_colors"]))
+        form.addRow("Detection", self.invert_checkbox)
+
+        self.frame_width_spin = QSpinBox()
+        self.frame_width_spin.setRange(160, 8192)
+        self.frame_width_spin.setSingleStep(16)
+        self.frame_width_spin.setValue(int(settings["frame_width"]))
+        form.addRow("Frame Width", self.frame_width_spin)
+
+        self.frame_height_spin = QSpinBox()
+        self.frame_height_spin.setRange(120, 4320)
+        self.frame_height_spin.setSingleStep(16)
+        self.frame_height_spin.setValue(int(settings["frame_height"]))
+        form.addRow("Frame Height", self.frame_height_spin)
+
+        layout.addLayout(form)
+
+        self.button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.button_box.accepted.connect(self._validate_and_accept)
+        self.button_box.rejected.connect(self.reject)
+        layout.addWidget(self.button_box)
+
+    def get_settings(self):
+        """Return dialog values as a runtime settings dictionary."""
+        return {
+            "dict_type": self.dict_combo.currentText(),
+            "squares_x": self.squares_x_spin.value(),
+            "squares_y": self.squares_y_spin.value(),
+            "square_length": float(self.square_length_spin.value()),
+            "marker_length": float(self.marker_length_spin.value()),
+            "invert_colors": self.invert_checkbox.isChecked(),
+            "frame_width": self.frame_width_spin.value(),
+            "frame_height": self.frame_height_spin.value(),
+        }
+
+    def _validate_and_accept(self):
+        """Validate input before closing the popup."""
+        is_valid, message, _ = validate_runtime_settings(self.get_settings())
+        if not is_valid:
+            QMessageBox.warning(self, "Invalid Parameters", message)
+            return
+        self.accept()
 
 
 class ChArUcoCalibrationGUI(QMainWindow):
@@ -46,6 +150,8 @@ class ChArUcoCalibrationGUI(QMainWindow):
         super().__init__()
         self.setWindowTitle("ChArUco Camera Calibration & Measurement Tool")
         self.setGeometry(50, 50, 4000, 3000)
+
+        self.runtime_settings = self.load_runtime_settings()
         
         # Initialize detector components
         self.init_detectors()
@@ -88,6 +194,70 @@ class ChArUcoCalibrationGUI(QMainWindow):
         if hasattr(sys, "_MEIPASS"):
             return os.path.join(sys._MEIPASS, path)
         return os.path.join(os.path.abspath("."), path)
+
+    def load_runtime_settings(self):
+        """Load persisted runtime settings from JSON cache file."""
+        defaults = get_default_runtime_settings()
+
+        if not os.path.exists(RUNTIME_SETTINGS_FILE):
+            return defaults
+
+        try:
+            with open(RUNTIME_SETTINGS_FILE, "r", encoding="utf-8") as file:
+                data = json.load(file)
+            is_valid, _, normalized = validate_runtime_settings(data)
+            if is_valid:
+                return normalized
+        except Exception:
+            pass
+
+        return defaults
+
+    def save_runtime_settings(self):
+        """Persist runtime settings to JSON cache file."""
+        try:
+            with open(RUNTIME_SETTINGS_FILE, "w", encoding="utf-8") as file:
+                json.dump(self.runtime_settings, file, indent=2)
+        except Exception as e:
+            QMessageBox.warning(self, "Settings Warning", f"Failed to save settings cache: {str(e)}")
+
+    def open_camera_parameters_popup(self):
+        """Show popup and update runtime settings if user confirms."""
+        dialog = CameraParametersDialog(self.runtime_settings, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+
+        is_valid, message, normalized = validate_runtime_settings(dialog.get_settings())
+        if not is_valid:
+            QMessageBox.warning(self, "Invalid Parameters", message)
+            return False
+
+        self.runtime_settings = normalized
+        self.save_runtime_settings()
+        return True
+
+    def apply_runtime_detectors(self):
+        """Recreate board and detectors from current runtime settings."""
+        settings = self.runtime_settings
+        self.charuco_detector, self.aruco_detector, self.board, self.aruco_dict = create_detectors(
+            settings["dict_type"],
+            settings["squares_x"],
+            settings["squares_y"],
+            settings["square_length"],
+            settings["marker_length"],
+        )
+
+    def create_video_thread(self):
+        """Create a configured video thread from current runtime settings."""
+        settings = self.runtime_settings
+        return VideoThread(
+            self.camera_source,
+            self.charuco_detector,
+            self.board,
+            invert_colors=settings["invert_colors"],
+            frame_width=settings["frame_width"],
+            frame_height=settings["frame_height"],
+        )
 
     def stop_active_camera(self):
         """Stop any active camera thread safely"""
@@ -155,7 +325,7 @@ class ChArUcoCalibrationGUI(QMainWindow):
     def init_detectors(self):
         """Initialize ArUco and ChArUco detectors"""
         try:
-            self.charuco_detector, self.aruco_detector, self.board, self.aruco_dict = get_detectors()
+            self.apply_runtime_detectors()
         except Exception as e:
             QMessageBox.critical(self, "Initialization Error", 
                                f"Failed to initialize detectors: {str(e)}")
@@ -476,7 +646,13 @@ class ChArUcoCalibrationGUI(QMainWindow):
             if self.video_thread and self.video_thread.isRunning():
                 self.stop_calibration_camera()
 
-            self.video_thread = VideoThread(self.camera_source, self.charuco_detector, self.board)
+            if not self.open_camera_parameters_popup():
+                self.log_message(self.calib_log, "Camera start cancelled")
+                return
+
+            self.apply_runtime_detectors()
+
+            self.video_thread = self.create_video_thread()
             self.video_thread.change_pixmap.connect(self.update_calib_image)
             self.video_thread.detection_info.connect(self.update_calib_detection)
             self.video_thread.camera_lost.connect(self.on_camera_lost)
@@ -492,7 +668,11 @@ class ChArUcoCalibrationGUI(QMainWindow):
             self.calib_start_btn.setEnabled(False)
             self.calib_capture_btn.setEnabled(True)
             self.calib_stop_btn.setEnabled(True)
-            self.log_message(self.calib_log, f"Camera started successfully (source: {self.camera_source})")
+            settings = self.runtime_settings
+            self.log_message(
+                self.calib_log,
+                f"Camera started (source: {self.camera_source}, {settings['frame_width']}x{settings['frame_height']}, {settings['dict_type']})",
+            )
 
         except Exception as e:
             QMessageBox.critical(self, "Camera Error", f"Failed to start camera: {str(e)}")
@@ -611,11 +791,17 @@ class ChArUcoCalibrationGUI(QMainWindow):
             if self.video_thread and self.video_thread.isRunning():
                 self.stop_extrinsics_camera()
 
+            if not self.open_camera_parameters_popup():
+                self.log_message(self.extrin_log, "Camera start cancelled")
+                return
+
+            self.apply_runtime_detectors()
+
             # Load intrinsics for extrinsic module
             self.camera_matrix, self.dist_coeffs = self.extrinsic.load_intrinsics()
             self.extrinsic.set_intrinsics(self.camera_matrix, self.dist_coeffs)
 
-            self.video_thread = VideoThread(self.camera_source, self.charuco_detector, self.board)
+            self.video_thread = self.create_video_thread()
             self.video_thread.change_pixmap.connect(self.update_extrin_image)
             self.video_thread.detection_info.connect(self.update_extrin_detection)
             self.video_thread.camera_lost.connect(self.on_camera_lost)
@@ -631,7 +817,11 @@ class ChArUcoCalibrationGUI(QMainWindow):
             self.extrin_start_btn.setEnabled(False)
             self.extrin_capture_btn.setEnabled(True)
             self.extrin_stop_btn.setEnabled(True)
-            self.log_message(self.extrin_log, "Camera started - show ChArUco board")
+            settings = self.runtime_settings
+            self.log_message(
+                self.extrin_log,
+                f"Camera started - show ChArUco board ({settings['frame_width']}x{settings['frame_height']}, {settings['dict_type']})",
+            )
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to start: {str(e)}")
@@ -711,13 +901,19 @@ class ChArUcoCalibrationGUI(QMainWindow):
             if self.video_thread and self.video_thread.isRunning():
                 self.stop_measurement()
 
+            if not self.open_camera_parameters_popup():
+                self.log_message(self.measure_log, "Measurement start cancelled")
+                return
+
+            self.apply_runtime_detectors()
+
             # Set calibration data in measurement module
             self.measurement.set_calibration(
                 self.camera_matrix, self.dist_coeffs,
                 self.rvec, self.tvec
             )
 
-            self.video_thread = VideoThread(self.camera_source, self.charuco_detector, self.board)
+            self.video_thread = self.create_video_thread()
             self.video_thread.change_pixmap.connect(self.update_measure_display_from_signal)
             self.video_thread.detection_info.connect(self.store_measurement_frame)
             self.video_thread.camera_lost.connect(self.on_camera_lost)
@@ -737,7 +933,11 @@ class ChArUcoCalibrationGUI(QMainWindow):
             self.click_points = []
             self.current_measure_frame = None
 
-            self.log_message(self.measure_log, "Measurement mode started - showing undistorted feed")
+            settings = self.runtime_settings
+            self.log_message(
+                self.measure_log,
+                f"Measurement mode started ({settings['frame_width']}x{settings['frame_height']}, {settings['dict_type']})",
+            )
 
         except Exception as e:
             QMessageBox.critical(self, "Measurement Error", f"Failed to start: {str(e)}")
