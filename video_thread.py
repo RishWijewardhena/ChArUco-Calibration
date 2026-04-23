@@ -18,7 +18,16 @@ class VideoThread(QThread):
     detection_info = pyqtSignal(dict)
     camera_lost = pyqtSignal(str)
 
-    def __init__(self, camera_source, detector, board, invert_colors=None, target_fps=30):
+    def __init__(
+        self,
+        camera_source,
+        detector,
+        board,
+        invert_colors=None,
+        target_fps=30,
+        frame_width=1280,
+        frame_height=960,
+    ):
         """
         Initialize video capture thread.
 
@@ -29,6 +38,8 @@ class VideoThread(QThread):
             invert_colors (bool, optional): Whether to invert colors before detection.
                                        If None, uses INVERT_COLORS from config
             target_fps (int): Target frames per second to prevent UI lag
+            frame_width (int): Desired camera frame width
+            frame_height (int): Desired camera frame height
         """
         super().__init__()
         self.camera_source = camera_source
@@ -40,6 +51,8 @@ class VideoThread(QThread):
         self.target_fps = target_fps
         self.frame_interval = 1.0 / target_fps
         self.max_read_failures = 20
+        self.frame_width = max(1, int(frame_width))
+        self.frame_height = max(1, int(frame_height))
         
     def run(self):
         """Main thread execution loop - captures and processes frames"""
@@ -50,9 +63,9 @@ class VideoThread(QThread):
             if not self.cap.isOpened():
                 raise RuntimeError(f"Cannot open camera {self.camera_source}")
             
-            # Set camera resolution to 1280×960 for better calibration accuracy
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 960)
+            # Apply user-selected frame size.
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
             
             last_frame_time = time.time()
             read_failures = 0
