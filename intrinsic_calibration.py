@@ -17,7 +17,7 @@ class CalibrationWorker(QThread):
     finished = pyqtSignal(bool, str, object)
     progress = pyqtSignal(str)
     
-    def __init__(self, corners, ids, board, image_size):
+    def __init__(self, corners, ids, board, image_size, frame_width=None, frame_height=None):
         """
         Initialize calibration worker.
         
@@ -26,12 +26,16 @@ class CalibrationWorker(QThread):
             ids (list): List of detected ChArUco ID arrays
             board: ChArUco board instance
             image_size (tuple): Image dimensions (width, height)
+            frame_width (int, optional): Original capture width for adaptive RMS threshold
+            frame_height (int, optional): Original capture height for adaptive RMS threshold
         """
         super().__init__()
         self.corners = corners
         self.ids = ids
         self.board = board
         self.image_size = image_size
+        self.frame_width = frame_width or image_size[0]
+        self.frame_height = frame_height or image_size[1]
         
     def run(self):
         """Execute calibration algorithm"""
@@ -47,8 +51,18 @@ class CalibrationWorker(QThread):
                 flags=flags
             )
 
-            if not ret or ret > 1.5:  # RMS error threshold (stricter for better accuracy)
-                self.finished.emit(False, "Calibration RMS error too high. Collect better frames.", None)
+            # Calculate resolution-adaptive RMS threshold
+            from config import get_resolution_adaptive_rms_threshold
+            rms_threshold = get_resolution_adaptive_rms_threshold(self.frame_width, self.frame_height)
+            
+            self.progress.emit(f"RMS threshold for this resolution: {rms_threshold:.2f} pixels")
+
+            if not ret or ret > rms_threshold:
+                self.finished.emit(
+                    False, 
+                    f"Calibration RMS error too high ({ret:.4f} > {rms_threshold:.2f}). Collect better frames from varied angles.", 
+                    None
+                )
                 return
                 
             calib_data = {
@@ -58,8 +72,8 @@ class CalibrationWorker(QThread):
                 'image_size': self.image_size
             }
             
-            self.progress.emit(f"Calibration successful! RMS = {ret:.4f}")
-            self.finished.emit(True, f"Calibration completed with RMS error: {ret:.4f}", calib_data)
+            self.progress.emit(f"Calibration successful! RMS = {ret:.4f} (threshold: {rms_threshold:.2f})")
+            self.finished.emit(True, f"Calibration completed with RMS error: {ret:.4f} pixels", calib_data)
             
         except Exception as e:
             self.finished.emit(False, f"Calibration failed: {str(e)}", None)
@@ -109,12 +123,14 @@ class IntrinsicCalibration:
         self.all_charuco_ids = []
         self.image_size = None
     
-    def run_calibration(self, board):
+    def run_calibration(self, board, frame_width=None, frame_height=None):
         """
         Create and return a CalibrationWorker thread to run calibration.
         
         Args:
             board: ChArUco board instance
+            frame_width (int, optional): Original camera frame width for RMS threshold calculation
+            frame_height (int, optional): Original camera frame height for RMS threshold calculation
         
         Returns:
             CalibrationWorker: Thread ready to start
@@ -129,7 +145,9 @@ class IntrinsicCalibration:
             self.all_charuco_corners, 
             self.all_charuco_ids, 
             board, 
-            self.image_size
+            self.image_size,
+            frame_width=frame_width or self.image_size[0],
+            frame_height=frame_height or self.image_size[1]
         )
     
     @staticmethod
