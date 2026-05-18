@@ -121,6 +121,42 @@ def validate_runtime_settings(settings):
     return True, "OK", normalized
 
 
+def get_resolution_adaptive_rms_threshold(frame_width, frame_height):
+    """
+    Calculate resolution-adaptive RMS threshold for calibration.
+    
+    RMS is measured in pixels. Higher resolution cameras report proportionally larger
+    pixel errors for the same physical detection accuracy. This function scales the
+    RMS threshold based on resolution relative to a reference (1280×960).
+    
+    Args:
+        frame_width (int): Camera frame width in pixels
+        frame_height (int): Camera frame height in pixels
+    
+    Returns:
+        float: Adaptive RMS threshold (pixels)
+    
+    Examples:
+        1280×960 (reference):  ~1.5 pixels
+        1920×1440:             ~2.0 pixels
+        3840×2160 (4K):        ~2.8 pixels
+    """
+    # Reference resolution (baseline from default config)
+    REF_WIDTH = 1280
+    REF_HEIGHT = 960
+    BASE_THRESHOLD = 1.5
+    
+    # Calculate image diagonals to handle arbitrary aspect ratios
+    ref_diagonal = (REF_WIDTH**2 + REF_HEIGHT**2) ** 0.5
+    current_diagonal = (frame_width**2 + frame_height**2) ** 0.5
+    
+    # Scale threshold proportionally
+    resolution_factor = current_diagonal / ref_diagonal
+    adaptive_threshold = BASE_THRESHOLD * resolution_factor
+    
+    return adaptive_threshold
+
+
 def create_aruco_board(dict_name, squares_x, squares_y, square_length, marker_length):
     """Create and return a ChArUco board using runtime parameters."""
     dict_value = get_aruco_dict_value(dict_name)
