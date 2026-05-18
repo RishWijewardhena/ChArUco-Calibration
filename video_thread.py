@@ -17,6 +17,7 @@ class VideoThread(QThread):
     change_pixmap = pyqtSignal(QImage)
     detection_info = pyqtSignal(dict)
     camera_lost = pyqtSignal(str)
+    frame_timing = pyqtSignal(dict)  # Emit timing diagnostics: {'avg_process_time_ms': float, 'dropped_frames': int}
 
     def __init__(
         self,
@@ -54,6 +55,11 @@ class VideoThread(QThread):
         self.frame_width = max(1, int(frame_width))
         self.frame_height = max(1, int(frame_height))
         
+        # Frame-skipping backpressure: track if UI is still rendering previous frame
+        self.rendering = False
+        self.dropped_frame_count = 0
+        self.frame_times = []  # Rolling window of last 30 frame times for averaging
+        
     def run(self):
         """Main thread execution loop - captures and processes frames"""
         try:
@@ -69,6 +75,7 @@ class VideoThread(QThread):
             
             last_frame_time = time.time()
             read_failures = 0
+            last_diagnostic_time = time.time()
 
             while self.running:
                 ret, frame = self.cap.read()
@@ -92,22 +99,23 @@ class VideoThread(QThread):
                     time.sleep(0.001)  # Small sleep to prevent CPU spinning
                     continue
                 last_frame_time = current_time
+                frame_process_start = time.time()
 
-                # Process frame
+                # Process frame (FULL RESOLUTION - detection must match calibration matrix)
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 if self.invert_colors:
                     gray = cv2.bitwise_not(gray)
 
                 charuco_corners, charuco_ids, marker_corners, marker_ids = self.detector.detectBoard(gray)
 
-                # Draw detections
+                # Draw detections (on full resolution frame)
                 display_frame = frame.copy()
                 if marker_ids is not None and len(marker_ids) > 0:
                     cv2.aruco.drawDetectedMarkers(display_frame, marker_corners, marker_ids)
                 if charuco_ids is not None and len(charuco_ids) > 0:
                     cv2.aruco.drawDetectedCornersCharuco(display_frame, charuco_corners, charuco_ids)
 
-                # Emit detection info
+                # Emit detection info (always at full resolution for calibration accuracy)
                 info = {
                     'corners_detected': len(charuco_ids) if charuco_ids is not None else 0,
                     'charuco_corners': charuco_corners,
@@ -116,12 +124,37 @@ class VideoThread(QThread):
                 }
                 self.detection_info.emit(info)
 
-                # Convert to Qt format
-                rgb_image = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
-                h, w, ch = rgb_image.shape
-                bytes_per_line = ch * w
-                qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-                self.change_pixmap.emit(qt_image)
+                # Frame-skipping backpressure: skip emission if UI is still rendering previous frame
+                # This prevents frame queuing and reduces flashing at high resolution
+                if self.rendering:
+                    self.dropped_frame_count += 1
+                else:
+                    # Convert to Qt format for display
+                    rgb_image = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+                    h, w, ch = rgb_image.shape
+                    bytes_per_line = ch * w
+                    qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+                    self.rendering = True
+                    self.change_pixmap.emit(qt_image)
+                    self.rendering = False
+                
+                # Track frame processing time (milliseconds)
+                frame_process_time = (time.time() - frame_process_start) * 1000
+                self.frame_times.append(frame_process_time)
+                if len(self.frame_times) > 30:
+                    self.frame_times.pop(0)
+                
+                # Emit diagnostics every ~1 second
+                if (time.time() - last_diagnostic_time) >= 1.0:
+                    avg_frame_time = sum(self.frame_times) / len(self.frame_times) if self.frame_times else 0
+                    self.frame_timing.emit({
+                        'avg_process_time_ms': avg_frame_time,
+                        'dropped_frames': self.dropped_frame_count,
+                        'frame_width': self.frame_width,
+                        'frame_height': self.frame_height
+                    })
+                    self.dropped_frame_count = 0  # Reset counter after reporting
+                    last_diagnostic_time = time.time()
                 
         except Exception as e:
             print(f"Video thread error: {e}")
