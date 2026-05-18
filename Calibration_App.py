@@ -322,6 +322,28 @@ class ChArUcoCalibrationGUI(QMainWindow):
         self.statusBar().showMessage(message, 5000)
         QMessageBox.warning(self, "Camera Disconnected", message)
 
+    def on_frame_timing_update(self, timing_data):
+        """Handle frame timing diagnostics from video thread.
+        
+        Args:
+            timing_data (dict): {'avg_process_time_ms': float, 'dropped_frames': int, 'frame_width': int, 'frame_height': int}
+        """
+        avg_time = timing_data.get('avg_process_time_ms', 0)
+        dropped = timing_data.get('dropped_frames', 0)
+        width = timing_data.get('frame_width', 0)
+        height = timing_data.get('frame_height', 0)
+        
+        # Check if processing is slow (> 40ms for 30fps target)
+        # At 4K+ resolutions, frame processing can exceed hardware capabilities
+        if avg_time > 40:
+            warning_msg = f"⚠ High frame processing time: {avg_time:.1f}ms (resolution: {width}×{height})"
+            if dropped > 0:
+                warning_msg += f" | Dropped {dropped} frames"
+            
+            # Only warn if resolution is high (likely to be problematic)
+            if width >= 1920 or height >= 1440:
+                self.statusBar().showMessage(warning_msg, 2000)
+
     def init_detectors(self):
         """Initialize ArUco and ChArUco detectors"""
         try:
@@ -656,6 +678,7 @@ class ChArUcoCalibrationGUI(QMainWindow):
             self.video_thread.change_pixmap.connect(self.update_calib_image)
             self.video_thread.detection_info.connect(self.update_calib_detection)
             self.video_thread.camera_lost.connect(self.on_camera_lost)
+            self.video_thread.frame_timing.connect(self.on_frame_timing_update)
             self.video_thread.finished.connect(self.on_video_thread_finished)
             self.video_thread.start()
 
@@ -809,6 +832,7 @@ class ChArUcoCalibrationGUI(QMainWindow):
             self.video_thread.change_pixmap.connect(self.update_extrin_image)
             self.video_thread.detection_info.connect(self.update_extrin_detection)
             self.video_thread.camera_lost.connect(self.on_camera_lost)
+            self.video_thread.frame_timing.connect(self.on_frame_timing_update)
             self.video_thread.finished.connect(self.on_video_thread_finished)
             self.video_thread.start()
 
@@ -921,6 +945,7 @@ class ChArUcoCalibrationGUI(QMainWindow):
             self.video_thread.change_pixmap.connect(self.update_measure_display_from_signal)
             self.video_thread.detection_info.connect(self.store_measurement_frame)
             self.video_thread.camera_lost.connect(self.on_camera_lost)
+            self.video_thread.frame_timing.connect(self.on_frame_timing_update)
             self.video_thread.finished.connect(self.on_video_thread_finished)
             self.video_thread.start()
 
