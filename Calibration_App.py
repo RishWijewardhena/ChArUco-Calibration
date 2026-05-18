@@ -731,8 +731,12 @@ class ChArUcoCalibrationGUI(QMainWindow):
             self.calib_calibrate_btn.setEnabled(False)
             self.log_message(self.calib_log, "Running calibration... Please wait.")
             
+            # Get frame dimensions from current runtime settings for adaptive RMS threshold
+            frame_width = self.runtime_settings.get('frame_width', 1280)
+            frame_height = self.runtime_settings.get('frame_height', 960)
+            
             # Run calibration in background thread using module
-            self.calib_worker = self.intrinsic.run_calibration(self.board)
+            self.calib_worker = self.intrinsic.run_calibration(self.board, frame_width, frame_height)
             self.calib_worker.progress.connect(lambda msg: self.log_message(self.calib_log, msg))
             self.calib_worker.finished.connect(self.calibration_finished)
             self.calib_worker.start()
