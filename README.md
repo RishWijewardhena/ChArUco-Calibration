@@ -275,7 +275,36 @@ python -c "import config; print('OK')"
 - Collect 20-30 frames (not just minimum 8)
 - Vary board angles: tilted, rotated, near, far
 - Ensure good lighting and sharp focus
-- RMS error should be < 1.0 (lower is better)
+- RMS error should be < 1.0 for optimal calibration (see RMS explanation below)
+
+### High-Resolution Camera (4K / 2.7K) Usage
+
+**Display Flashing at 4K Resolution:**
+- Expected behavior on CPU-constrained systems — full 4K frame processing (24MB/frame @ 30fps) creates high CPU load
+- The app now includes **frame-skipping backpressure**: if the UI can't render fast enough, frames are skipped gracefully (not queued)
+- This prevents flashing but may result in lower frame rate display (detection still happens at full 4K)
+- Status bar shows: `⚠ High frame processing time: XXms` if performance degrades
+
+**Recommendations for 4K:**
+1. **Use dedicated GPU acceleration** (if available) for OpenCV detection
+2. **Reduce frame capture rate**: Lower target FPS in Camera Parameters dialog (e.g., 15 FPS instead of 30)
+3. **Use lower resolution if needed**: If flashing persists, try 1920×1440 or 1280×960
+4. **Higher RMS threshold at 4K**: Resolution-adaptive RMS is automatically applied:
+   - 1280×960 (reference): RMS threshold ≈ 1.5 pixels
+   - 1920×1440: RMS threshold ≈ 2.25 pixels
+   - 3840×2160 (4K): RMS threshold ≈ 4.13 pixels
+   - This scaling is **normal and expected** — physical calibration accuracy is the same
+
+**Why RMS is Higher at 4K:**
+
+RMS (Root Mean Square) measures reprojection error in **pixels**. The same physical detection accuracy appears as larger pixel error at higher resolutions:
+
+| Resolution | Detection Error | RMS Value | Quality |
+|---|---|---|---|
+| 1280×960 | 0.1mm | 0.8 px | Excellent |
+| 3840×2160 (4K) | 0.1mm (same) | 2.4 px | Still Excellent ✓ |
+
+The app **automatically scales the acceptance threshold** based on resolution, so your 4K calibration succeeds even though the pixel-based RMS appears higher.
 
 ### Measurement Inaccuracy
 
